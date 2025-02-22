@@ -3,30 +3,41 @@ from discord.ext import tasks
 import requests
 import asyncio
 import logging
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('discord')
 
-# Bot token (replace with your bot token)
-TOKEN = "MTM0MjY0MDQyNjQ2NDcwNjY3MA.Gt8y3h.RmjIkDCyGRnUk5b6QkacarTWcQwJQtMlcjnrvg"
-
-# Voice channel ID (replace with your voice channel ID)
-VOICE_CHANNEL_ID = 1342636038379802634  # e.g., 1342636038379802634
-
-# VeChainStats API key
-VCS_API_KEY = "5a03b2ddb1d88e962b51c6af72e2a842befb625c6aa9116b97e3ffcc053aa699"
+# Get secrets from environment variables (set in Replit Secrets)
+TOKEN = os.getenv("TOKEN")
+VOICE_CHANNEL_ID = int(os.getenv("VOICE_CHANNEL_ID"))
+VCS_API_KEY = os.getenv("VCS_API_KEY")
 
 # MVA token symbol
 MVA_TOKEN_SYMBOL = "MVA"
 
-# VeChainStats API endpoint for token price
+# VeChainStats API endpoint
 VECHAIN_API = "https://api.vechainstats.com/v2/token/price"
 
 # Discord client setup
 intents = discord.Intents.default()
 intents.guilds = True
 client = discord.Client(intents=intents)
+
+# Keep-alive HTTP server
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def start_server():
+    server = HTTPServer(('0.0.0.0', 8080), KeepAliveHandler)
+    server.serve_forever()
 
 # Function to fetch MVA price from VeChainStats
 def get_mva_price():
@@ -46,12 +57,12 @@ def get_mva_price():
         data = response.json()
 
         if not data.get("status", {}).get("success", False):
-            logger.warning("API request failed:", data)
+            logger.warning(f"API request failed: {data}")
             return None
 
         price_usd = data.get("data", {}).get("price_usd")
         if price_usd is None:
-            logger.warning("Price data not found in response:", data)
+            logger.warning(f"Price data not found in response: {data}")
             return None
 
         price = float(price_usd)
@@ -69,11 +80,11 @@ def get_mva_price():
 def truncate_to_4_decimals(price):
     price_str = str(price)
     integer_part, decimal_part = price_str.split(".") if "." in price_str else (price_str, "0")
-    decimal_part = (decimal_part + "0000")[:4]  # Take first 4 digits, pad with zeros if needed
+    decimal_part = (decimal_part + "0000")[:4]
     return float(f"{integer_part}.{decimal_part}")
 
 # Task to update voice channel name
-@tasks.loop(minutes=15)  # Changed to 15 minutes
+@tasks.loop(minutes=15)
 async def update_voice_channel():
     channel = client.get_channel(VOICE_CHANNEL_ID)
     if channel is None:
@@ -87,7 +98,6 @@ async def update_voice_channel():
     else:
         new_name = "MVA: N/A"
     
-    # Ensure name fits within Discord's 100-character limit
     if len(new_name) > 100:
         new_name = new_name[:100]
     
@@ -104,8 +114,11 @@ async def update_voice_channel():
 async def on_ready():
     logger.info(f"Logged in as {client.user}")
     if not update_voice_channel.is_running():
-        await asyncio.sleep(60)  # Wait 60 seconds before starting to avoid rate limit on startup
+        await asyncio.sleep(60)
         update_voice_channel.start()
+
+# Start keep-alive server in a separate thread
+threading.Thread(target=start_server, daemon=True).start()
 
 # Run the bot
 client.run(TOKEN)
